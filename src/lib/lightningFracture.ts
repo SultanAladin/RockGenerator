@@ -385,13 +385,16 @@ function sampleSeedsAlongPolylines(polylines: THREE.Vector3[][], p: LightningPar
   return seeds;
 }
 
-export function fractureByLightning(geom: THREE.BufferGeometry, polylines: THREE.Vector3[][], p: LightningParams) {
-  const triCount = geom.attributes.position ? geom.attributes.position.count / 3 : 0;
-  if (triCount === 0 || polylines.length === 0) {
-    return [{ geometry: geom, volume: computeVolume(geom), centroid: computeCentroid(geom), colorHsl: null }];
+export function fractureBySeeds(geom: THREE.BufferGeometry, inSeeds: THREE.Vector3[], jitter: number, seed: number) {
+  const seeds: THREE.Vector3[] = [];
+  for (const s of inSeeds) {
+      let tooClose = false;
+      for (const fs of seeds) {
+          if (s.distanceToSquared(fs) < 0.002) { tooClose = true; break; }
+      }
+      if (!tooClose) seeds.push(s);
   }
-  const seedRng = new RNG(p.seed ^ 0xDEADBEEF);
-  const seeds = sampleSeedsAlongPolylines(polylines, p, seedRng);
+
   if (seeds.length < 2) {
     return [{ geometry: geom, volume: computeVolume(geom), centroid: computeCentroid(geom), colorHsl: null }];
   }
@@ -422,7 +425,7 @@ export function fractureByLightning(geom: THREE.BufferGeometry, polylines: THREE
   cellBaseGeo.deleteAttribute('uv');
   cellBaseGeo.deleteAttribute('color');
 
-  const cutterRes = Math.max(1, Math.round(18 * p.fractureJitter));
+  const cutterRes = Math.max(1, Math.round(18 * jitter));
   const cutterGeo = new THREE.BoxGeometry(maxDim * 2, maxDim * 2, maxDim, cutterRes, cutterRes, 1);
   cutterGeo.translate(0, 0, -maxDim / 2);
   cutterGeo.deleteAttribute('uv');
@@ -459,14 +462,14 @@ export function fractureByLightning(geom: THREE.BufferGeometry, polylines: THREE
         const pos = uniqueCutterGeo.attributes.position;
         const vWorld = new THREE.Vector3();
         const ns = 3.0;
-        const phase = p.seed * 0.1;
+        const phase = seed * 0.1;
         for (let k = 0; k < pos.count; k++) {
           if (Math.abs(pos.getZ(k)) < 0.1) {
             vWorld.fromBufferAttribute(pos, k);
             vWorld.applyMatrix4(dummy.matrixWorld);
             let n = Math.sin(vWorld.x*ns + phase)*Math.cos(vWorld.y*ns + phase)*Math.sin(vWorld.z*ns + phase);
             n += 0.5 * Math.sin(vWorld.x*ns*2.5 + phase)*Math.cos(vWorld.y*ns*2.5 + phase)*Math.sin(vWorld.z*ns*2.5 + phase);
-            pos.setZ(k, pos.getZ(k) + n * p.fractureJitter * 0.5);
+            pos.setZ(k, pos.getZ(k) + n * jitter * 0.5);
           }
         }
         uniqueCutterGeo.computeVertexNormals();
@@ -483,16 +486,39 @@ export function fractureByLightning(geom: THREE.BufferGeometry, polylines: THREE
       try {
         if (!isReversed) cellBrush = evaluator.evaluate(cellBrush, cutterBrush, SUBTRACTION);
         else             cellBrush = evaluator.evaluate(cellBrush, cutterBrush, INTERSECTION);
-      } catch (e) { degenerate = true; break; }
+      } catch (e) { 
+          try {
+             // Fallback to simple unjittered cutter
+             let simpleCutterBrush = cutterCache.get(pairKey + '_simple');
+             if (!simpleCutterBrush) {
+                const mid = seedA.clone().add(seedB).multiplyScalar(0.5);
+                const baseCGeo = new THREE.BoxGeometry(maxDim * 2, maxDim * 2, maxDim);
+                baseCGeo.translate(0, 0, -maxDim / 2);
+                simpleCutterBrush = new Brush(baseCGeo);
+                simpleCutterBrush.position.copy(mid);
+                simpleCutterBrush.lookAt(seedB);
+                simpleCutterBrush.updateMatrixWorld();
+                cutterCache.set(pairKey + '_simple', simpleCutterBrush);
+             }
+             if (!isReversed) cellBrush = evaluator.evaluate(cellBrush, simpleCutterBrush, SUBTRACTION);
+             else             cellBrush = evaluator.evaluate(cellBrush, simpleCutterBrush, INTERSECTION);
+          } catch (e2) {
+              degenerate = true; break; 
+          }
+      }
       if (!cellBrush.geometry || !cellBrush.geometry.attributes.position || cellBrush.geometry.attributes.position.count === 0) {
         degenerate = true; break;
       }
     }
-    if (degenerate) {
-        continue;
-    }
+    if (degenerate) continue;
 
-    const pieceBrush = evaluator.evaluate(baseRockBrush, cellBrush, INTERSECTION);
+    let pieceBrush;
+    try {
+       pieceBrush = evaluator.evaluate(baseRockBrush, cellBrush, INTERSECTION);
+    } catch (e) {
+       continue;
+    }
+    
     if (pieceBrush && pieceBrush.geometry && pieceBrush.geometry.attributes.position && pieceBrush.geometry.attributes.position.count > 0) {
       cells.push({
         geometry: pieceBrush.geometry,
@@ -513,4 +539,15 @@ export function fractureByLightning(geom: THREE.BufferGeometry, polylines: THREE
     cells[i].colorHsl = `hsl(${hue.toFixed(0)}, 55%, 55%)`;
   }
   return cells;
+}
+
+export function fractureByLightning(geom: THREE.BufferGeometry, polylines: THREE.Vector3[][], p: LightningParams) {
+  const triCount = geom.attributes.position ? geom.attributes.position.count / 3 : 0;
+  if (triCount === 0 || polylines.length === 0) {
+    return [{ geometry: geom, volume: computeVolume(geom), centroid: computeCentroid(geom), colorHsl: null }];
+  }
+  const seedRng = new RNG(p.seed ^ 0xDEADBEEF);
+  const seeds = sampleSeedsAlongPolylines(polylines, p, seedRng);
+  
+  return fractureBySeeds(geom, seeds, p.fractureJitter, p.seed);
 }

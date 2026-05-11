@@ -24,7 +24,9 @@ interface RockCanvasProps {
   
   // Fracture
   fracturePieces: FracturePiece[];
+  selectedPrimaryPieces?: Set<string>;
   onTogglePiece: (id: string) => void;
+  explodeFactor?: number;
 }
 
 const HighlightFace = ({ face }: { face: SelectedFace }) => {
@@ -58,7 +60,9 @@ export function RockCanvas({
   fractureSettings,
   onUpdateFractureSettings,
   fracturePieces,
-  onTogglePiece
+  selectedPrimaryPieces,
+  onTogglePiece,
+  explodeFactor = 0
 }: RockCanvasProps) {
   
   const [pendingCutStart, setPendingCutStart] = useState<[number, number, number] | null>(null);
@@ -66,7 +70,7 @@ export function RockCanvas({
   const targetMeshRef = useRef<THREE.Mesh>(null);
 
   const mainLightningLines = useMemo(() => {
-     if (phase !== 'Process' || fractureSettings.target !== 'main' || fractureSettings.mainAlgorithm !== 'lightning' || !geometry) return null;
+     if (phase !== 'Process' || fractureSettings.activeTab !== 'main' || fractureSettings.mainAlgorithm !== 'lightning' || !geometry) return null;
      const rng = new RNG(fractureSettings.mainLightning.seed);
      const mesh = new THREE.Mesh(geometry);
      mesh.updateMatrixWorld();
@@ -82,26 +86,26 @@ export function RockCanvas({
          allPolylines.push(...out.polylines);
      }
      return allPolylines;
-  }, [phase, geometry, fractureSettings.target, fractureSettings.mainAlgorithm, fractureSettings.mainLightning]);
+  }, [phase, geometry, fractureSettings.activeTab, fractureSettings.mainAlgorithm, fractureSettings.mainLightning]);
 
-  const shellLightningLines = useMemo(() => {
-     if (phase !== 'Process' || fractureSettings.target !== 'shell' || fractureSettings.shellAlgorithm !== 'lightning' || !geometry) return null;
-     const rng = new RNG(fractureSettings.shellLightning.seed);
+  const secondaryLightningLines = useMemo(() => {
+     if (phase !== 'Process' || fractureSettings.activeTab !== 'secondary' || fractureSettings.secondaryAlgorithm !== 'lightning' || !geometry) return null;
+     const rng = new RNG(fractureSettings.secondaryLightning.seed);
      const mesh = new THREE.Mesh(geometry);
      mesh.updateMatrixWorld();
-     const branchSurfacePts: (THREE.Vector3 | null)[] = Array.from({ length: fractureSettings.shellLightning.fractureBranches }, () => null);
+     const branchSurfacePts: (THREE.Vector3 | null)[] = Array.from({ length: fractureSettings.secondaryLightning.fractureBranches }, () => null);
      
      const allPolylines: THREE.Vector3[][] = [];
-     for (const cut of fractureSettings.shellLightning.cuts) {
+     for (const cut of fractureSettings.secondaryLightning.cuts) {
          const out = generateLightningPath(
            new THREE.Vector3(...cut.startPoint),
            new THREE.Vector3(...cut.endPoint),
-           fractureSettings.shellLightning, rng, mesh, branchSurfacePts
+           fractureSettings.secondaryLightning, rng, mesh, branchSurfacePts
          );
          allPolylines.push(...out.polylines);
      }
      return allPolylines;
-  }, [phase, geometry, fractureSettings.target, fractureSettings.shellAlgorithm, fractureSettings.shellLightning]);
+  }, [phase, geometry, fractureSettings.activeTab, fractureSettings.secondaryAlgorithm, fractureSettings.secondaryLightning]);
 
   // Keep targetMeshRef in sync with targetPos when it changes externally
   useEffect(() => {
@@ -112,7 +116,7 @@ export function RockCanvas({
 
   useEffect(() => {
     setPendingCutStart(null);
-  }, [phase, fractureSettings.target, fractureSettings.mainAlgorithm, fractureSettings.shellAlgorithm]);
+  }, [phase, fractureSettings.activeTab, fractureSettings.mainAlgorithm, fractureSettings.secondaryAlgorithm]);
 
   const innerGeometry = useMemo(() => {
       if ((phase === 'Process' || phase === 'Fracture') && geometry) {
@@ -122,11 +126,12 @@ export function RockCanvas({
   }, [phase, geometry, fractureSettings.thickness]);
 
   const handlePointerDown = (e: ThreeEvent<MouseEvent>) => {
-    if (phase === 'Process' && onUpdateFractureSettings) {
+    if ((phase === 'Process' || phase === 'Secondary') && onUpdateFractureSettings) {
         // Only place points if we are editing a lightning algorithm
-        const isMainLightning = fractureSettings.target === 'main' && fractureSettings.mainAlgorithm === 'lightning';
-        const isShellLightning = fractureSettings.target === 'shell' && fractureSettings.shellAlgorithm === 'lightning';
-        if (!isMainLightning && !isShellLightning) return;
+        const isMainLightning = phase === 'Process' && fractureSettings.mainAlgorithm === 'lightning';
+        const isSecondaryLightning = phase === 'Secondary' && fractureSettings.secondaryAlgorithm === 'lightning';
+        
+        if (!isMainLightning && !isSecondaryLightning) return;
 
         e.stopPropagation(); // prevent OrbitControls from grabbing immediately if we hit mesh
 
@@ -145,7 +150,7 @@ export function RockCanvas({
            } else {
              onUpdateFractureSettings({
                ...fractureSettings,
-               shellLightning: { ...fractureSettings.shellLightning, cuts: [...fractureSettings.shellLightning.cuts, newCut] }
+               secondaryLightning: { ...fractureSettings.secondaryLightning, cuts: [...fractureSettings.secondaryLightning.cuts, newCut] }
              });
            }
            setPendingCutStart(null);
@@ -247,170 +252,171 @@ export function RockCanvas({
 
       {phase === 'Process' && geometry && (
          <group>
-            {fractureSettings.showShell && innerGeometry ? (
-               <>
-                 <mesh geometry={geometry} onPointerDown={handlePointerDown}>
-                    <meshBasicMaterial color="#ffffff" wireframe={true} opacity={0.2} transparent={true} />
-                 </mesh>
-                 <mesh geometry={innerGeometry} onPointerDown={handlePointerDown}>
-                    <meshPhysicalMaterial 
-                       color="#a855f7" 
-                       transmission={0} 
-                       opacity={1} 
-                       metalness={0.1} 
-                       roughness={0.8} 
-                       flatShading={true} 
-                    />
-                 </mesh>
-               </>
-            ) : (
-                 <mesh geometry={geometry} onPointerDown={handlePointerDown}>
-                    <meshPhysicalMaterial 
-                       color="#8a8a8a" 
-                       transmission={0} 
-                       opacity={1} 
-                       metalness={0.1} 
-                       roughness={0.8} 
-                       flatShading={true} 
-                    />
-                 </mesh>
-            )}
+             <mesh geometry={geometry} onPointerDown={handlePointerDown}>
+                <meshPhysicalMaterial 
+                   color="#8a8a8a" 
+                   transmission={0} 
+                   opacity={0.8} 
+                   transparent={true}
+                   metalness={0.1} 
+                   roughness={0.8} 
+                   flatShading={true} 
+                />
+             </mesh>
             {onUpdateFractureSettings && pendingCutStart && (
                <mesh position={pendingCutStart}>
                   <sphereGeometry args={[0.15, 16, 16]} />
                   <meshBasicMaterial color="#00ffcc" depthTest={false} transparent opacity={0.8} />
                </mesh>
             )}
-            {onUpdateFractureSettings && (
-               <>
-                 {fractureSettings.target === 'main' && fractureSettings.mainAlgorithm === 'lightning' && (
-                    <>
-                      {mainLightningLines && mainLightningLines.map((linePts, idx) => {
-                         const lineGeo = new THREE.BufferGeometry().setFromPoints(linePts);
-                         return (
-                            <line key={idx} geometry={lineGeo}>
-                               <lineBasicMaterial color="#ffffff" linewidth={2} />
-                            </line>
-                         )
-                      })}
-                      {fractureSettings.mainLightning.cuts.map((cut, cutIdx) => (
-                        <group key={cut.id}>
-                          <TransformControls
-                            mode="translate"
-                            position={new THREE.Vector3(...cut.startPoint)}
-                            onObjectChange={(e) => {
-                              if (e?.target?.object) {
-                                const p = e.target.object.position;
-                                const newCuts = [...fractureSettings.mainLightning.cuts];
-                                newCuts[cutIdx] = { ...newCuts[cutIdx], startPoint: [p.x, p.y, p.z] };
-                                onUpdateFractureSettings({
-                                  ...fractureSettings,
-                                  mainLightning: { ...fractureSettings.mainLightning, cuts: newCuts }
-                                });
-                              }
-                            }}
-                          >
-                            <mesh>
-                              <sphereGeometry args={[0.15, 16, 16]} />
-                              <meshBasicMaterial color="#00ffff" depthTest={false} transparent opacity={0.8} />
-                            </mesh>
-                          </TransformControls>
+            {onUpdateFractureSettings && fractureSettings.mainAlgorithm === 'lightning' && (
+                <>
+                  {mainLightningLines && mainLightningLines.map((linePts, idx) => {
+                     const lineGeo = new THREE.BufferGeometry().setFromPoints(linePts);
+                     return (
+                        <primitive key={idx} object={new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: "#ffffff", linewidth: 2 }))} />
+                     )
+                  })}
+                  {fractureSettings.mainLightning.cuts.map((cut, cutIdx) => (
+                    <group key={cut.id}>
+                      <TransformControls
+                        mode="translate"
+                        position={new THREE.Vector3(...cut.startPoint)}
+                        onObjectChange={(e: any) => {
+                          if (e?.target?.object) {
+                            const p = e.target.object.position;
+                            const newCuts = [...fractureSettings.mainLightning.cuts];
+                            newCuts[cutIdx] = { ...newCuts[cutIdx], startPoint: [p.x, p.y, p.z] };
+                            onUpdateFractureSettings?.({
+                              ...fractureSettings,
+                              mainLightning: { ...fractureSettings.mainLightning, cuts: newCuts }
+                            });
+                          }
+                        }}
+                      >
+                        <mesh>
+                          <sphereGeometry args={[0.15, 16, 16]} />
+                          <meshBasicMaterial color="#00ffff" depthTest={false} transparent opacity={0.8} />
+                        </mesh>
+                      </TransformControls>
 
-                          <TransformControls
-                            mode="translate"
-                            position={new THREE.Vector3(...cut.endPoint)}
-                            onObjectChange={(e) => {
-                              if (e?.target?.object) {
-                                const p = e.target.object.position;
-                                const newCuts = [...fractureSettings.mainLightning.cuts];
-                                newCuts[cutIdx] = { ...newCuts[cutIdx], endPoint: [p.x, p.y, p.z] };
-                                onUpdateFractureSettings({
-                                  ...fractureSettings,
-                                  mainLightning: { ...fractureSettings.mainLightning, cuts: newCuts }
-                                });
-                              }
-                            }}
-                          >
-                            <mesh>
-                              <sphereGeometry args={[0.15, 16, 16]} />
-                              <meshBasicMaterial color="#ff00ff" depthTest={false} transparent opacity={0.8} />
-                            </mesh>
-                          </TransformControls>
-                        </group>
-                      ))}
-                    </>
-                 )}
-                 {fractureSettings.target === 'shell' && fractureSettings.shellAlgorithm === 'lightning' && (
-                    <>
-                      {shellLightningLines && shellLightningLines.map((linePts, idx) => {
-                         const lineGeo = new THREE.BufferGeometry().setFromPoints(linePts);
-                         return (
-                            <line key={idx} geometry={lineGeo}>
-                               <lineBasicMaterial color="#ffffff" linewidth={2} />
-                            </line>
-                         )
-                      })}
-                      {fractureSettings.shellLightning.cuts.map((cut, cutIdx) => (
-                        <group key={cut.id}>
-                          <TransformControls
-                            mode="translate"
-                            position={new THREE.Vector3(...cut.startPoint)}
-                            onObjectChange={(e) => {
-                              if (e?.target?.object) {
-                                const p = e.target.object.position;
-                                const newCuts = [...fractureSettings.shellLightning.cuts];
-                                newCuts[cutIdx] = { ...newCuts[cutIdx], startPoint: [p.x, p.y, p.z] };
-                                onUpdateFractureSettings({
-                                  ...fractureSettings,
-                                  shellLightning: { ...fractureSettings.shellLightning, cuts: newCuts }
-                                });
-                              }
-                            }}
-                          >
-                            <mesh>
-                              <sphereGeometry args={[0.15, 16, 16]} />
-                              <meshBasicMaterial color="#00ffff" depthTest={false} transparent opacity={0.8} />
-                            </mesh>
-                          </TransformControls>
-
-                          <TransformControls
-                            mode="translate"
-                            position={new THREE.Vector3(...cut.endPoint)}
-                            onObjectChange={(e) => {
-                              if (e?.target?.object) {
-                                const p = e.target.object.position;
-                                const newCuts = [...fractureSettings.shellLightning.cuts];
-                                newCuts[cutIdx] = { ...newCuts[cutIdx], endPoint: [p.x, p.y, p.z] };
-                                onUpdateFractureSettings({
-                                  ...fractureSettings,
-                                  shellLightning: { ...fractureSettings.shellLightning, cuts: newCuts }
-                                });
-                              }
-                            }}
-                          >
-                            <mesh>
-                              <sphereGeometry args={[0.15, 16, 16]} />
-                              <meshBasicMaterial color="#ff00ff" depthTest={false} transparent opacity={0.8} />
-                            </mesh>
-                          </TransformControls>
-                        </group>
-                      ))}
-                    </>
-                 )}
-               </>
+                      <TransformControls
+                        mode="translate"
+                        position={new THREE.Vector3(...cut.endPoint)}
+                        onObjectChange={(e: any) => {
+                          if (e?.target?.object) {
+                            const p = e.target.object.position;
+                            const newCuts = [...fractureSettings.mainLightning.cuts];
+                            newCuts[cutIdx] = { ...newCuts[cutIdx], endPoint: [p.x, p.y, p.z] };
+                            onUpdateFractureSettings?.({
+                              ...fractureSettings,
+                              mainLightning: { ...fractureSettings.mainLightning, cuts: newCuts }
+                            });
+                          }
+                        }}
+                      >
+                        <mesh>
+                          <sphereGeometry args={[0.15, 16, 16]} />
+                          <meshBasicMaterial color="#00ffff" depthTest={false} transparent opacity={0.8} />
+                        </mesh>
+                      </TransformControls>
+                    </group>
+                  ))}
+                </>
             )}
          </group>
       )}
 
-      {phase === 'Fracture' && (
+      {phase === 'Secondary' && innerGeometry && (
+         <group>
+             <mesh geometry={innerGeometry}>
+                <meshPhysicalMaterial 
+                   color="#f97316" 
+                   transmission={0.2} 
+                   opacity={0.3} 
+                   transparent={true}
+                   metalness={0.1} 
+                   roughness={0.8} 
+                   flatShading={true} 
+                />
+             </mesh>
+             {/* Note: primaryPieces are rendered by the shared Fracture/Secondary block below */}
+            {onUpdateFractureSettings && pendingCutStart && (
+               <mesh position={pendingCutStart}>
+                  <sphereGeometry args={[0.15, 16, 16]} />
+                  <meshBasicMaterial color="#00ffcc" depthTest={false} transparent opacity={0.8} />
+               </mesh>
+            )}
+             {onUpdateFractureSettings && fractureSettings.secondaryAlgorithm === 'lightning' && (
+                <>
+                  {secondaryLightningLines && secondaryLightningLines.map((linePts, idx) => {
+                     const lineGeo = new THREE.BufferGeometry().setFromPoints(linePts);
+                     return (
+                        <primitive key={idx} object={new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: "#ffffff", linewidth: 2 }))} />
+                     )
+                  })}
+                  {fractureSettings.secondaryLightning.cuts.map((cut, cutIdx) => (
+                    <group key={cut.id}>
+                      <TransformControls
+                        mode="translate"
+                        position={new THREE.Vector3(...cut.startPoint)}
+                        onObjectChange={(e: any) => {
+                          if (e?.target?.object) {
+                            const p = e.target.object.position;
+                            const newCuts = [...fractureSettings.secondaryLightning.cuts];
+                            newCuts[cutIdx] = { ...newCuts[cutIdx], startPoint: [p.x, p.y, p.z] };
+                            onUpdateFractureSettings?.({
+                              ...fractureSettings,
+                              secondaryLightning: { ...fractureSettings.secondaryLightning, cuts: newCuts }
+                            });
+                          }
+                        }}
+                      >
+                        <mesh>
+                          <sphereGeometry args={[0.15, 16, 16]} />
+                          <meshBasicMaterial color="#ff00ff" depthTest={false} transparent opacity={0.8} />
+                        </mesh>
+                      </TransformControls>
+
+                      <TransformControls
+                        mode="translate"
+                        position={new THREE.Vector3(...cut.endPoint)}
+                        onObjectChange={(e: any) => {
+                          if (e?.target?.object) {
+                            const p = e.target.object.position;
+                            const newCuts = [...fractureSettings.secondaryLightning.cuts];
+                            newCuts[cutIdx] = { ...newCuts[cutIdx], endPoint: [p.x, p.y, p.z] };
+                            onUpdateFractureSettings?.({
+                              ...fractureSettings,
+                              secondaryLightning: { ...fractureSettings.secondaryLightning, cuts: newCuts }
+                            });
+                          }
+                        }}
+                      >
+                        <mesh>
+                          <sphereGeometry args={[0.15, 16, 16]} />
+                          <meshBasicMaterial color="#ff00ff" depthTest={false} transparent opacity={0.8} />
+                        </mesh>
+                      </TransformControls>
+                    </group>
+                  ))}
+                </>
+             )}
+         </group>
+      )}
+
+      {(phase === 'Fracture' || phase === 'Secondary') && (
          <group>
             {fracturePieces.length === 0 && geometry && (
                <mesh geometry={geometry}>
                  <meshStandardMaterial color={settings.color} flatShading={settings.flatShading} roughness={0.8} metalness={0.1} />
                </mesh>
             )}
-            {fracturePieces.map(piece => (
-               <group key={piece.id}>
+            {fracturePieces.map(piece => {
+               const offset = piece.centroid ? piece.centroid.clone().normalize().multiplyScalar(explodeFactor * (piece.isShell ? 1.5 : 1.0)) : new THREE.Vector3();
+               const isSelected = phase === 'Secondary' && selectedPrimaryPieces?.has(piece.id);
+               return (
+               <group key={piece.id} position={offset}>
                    <mesh
                      geometry={piece.geometry}
                      visible={piece.visible}
@@ -427,16 +433,18 @@ export function RockCanvas({
                         roughness={0.8}
                         metalness={0.1}
                         side={THREE.DoubleSide}
+                        emissive={isSelected ? new THREE.Color("#8b5cf6") : new THREE.Color(0x000000)}
+                        emissiveIntensity={isSelected ? 0.5 : 0}
                      />
                    </mesh>
                    {piece.visible && (
                       <lineSegments visible={piece.visible}>
                         <edgesGeometry args={[piece.geometry]} />
-                        <lineBasicMaterial color="#000000" opacity={0.3} transparent />
+                        <lineBasicMaterial color={isSelected ? "#a855f7" : "#000000"} opacity={isSelected ? 0.8 : 0.3} transparent />
                       </lineSegments>
                    )}
                </group>
-            ))}
+             )})}
          </group>
       )}
 

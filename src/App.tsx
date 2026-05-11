@@ -9,7 +9,7 @@ import { Sidebar } from './components/Sidebar';
 import { Toolbar } from './components/Toolbar';
 import { RockCanvas } from './components/RockCanvas';
 import { createInitialGeometry, growRock } from './lib/builder';
-import { performSurfaceFracture, performLightningFracture, generateInnerGeometry } from './lib/fracture';
+import { performSecondaryFracture, performLightningFracture, generateInnerGeometry } from './lib/fracture';
 import * as THREE from 'three';
 
 const initialSettings: GrowthSettings = {
@@ -34,10 +34,9 @@ export default function App() {
   const [fractureSettings, setFractureSettings] = useState<FractureSettings>({
     thickness: 0.2,
     chunks: 10,
-    target: 'main',
-    showShell: false,
+    activeTab: 'main',
     mainAlgorithm: 'lightning',
-    shellAlgorithm: 'none',
+    secondaryAlgorithm: 'none',
     mainLightning: {
       seed: 123,
       fractureBranches: 3,
@@ -45,7 +44,7 @@ export default function App() {
       fractureSegments: 24,
       cuts: [{ id: '1', startPoint: [-0.9, 0.9, 0], endPoint: [0.9, -0.9, 0] }],
     },
-    shellLightning: {
+    secondaryLightning: {
       seed: 456,
       fractureBranches: 2,
       fractureJitter: 0.2,
@@ -55,7 +54,10 @@ export default function App() {
   });
   
   // Fracture state
-  const [fracturePieces, setFracturePieces] = useState<FracturePiece[]>([]);
+  const [primaryPieces, setPrimaryPieces] = useState<FracturePiece[]>([]);
+  const [selectedPrimaryPieces, setSelectedPrimaryPieces] = useState<Set<string>>(new Set());
+  const [fracturePieces, setFracturePieces] = useState<FracturePiece[]>([]); // Final pieces
+  const [explodeFactor, setExplodeFactor] = useState(0);
 
   useEffect(() => {
     // Generate initial low-poly rock core on mount
@@ -167,82 +169,88 @@ export default function App() {
     setPhase('Modeling');
   };
 
-  const handleApplyFracture = () => {
+  const handleApplyPrimaryFracture = () => {
     if (!currentGeometry) return;
-
     setTimeout(() => {
         let mainGeometries: THREE.BufferGeometry[] = [];
-        let shellGeometries: THREE.BufferGeometry[] = [];
-        
-        // Handle main core fracturing
         if (fractureSettings.mainAlgorithm === 'lightning') {
-            const baseForMain = (fractureSettings.showShell && fractureSettings.shellAlgorithm !== 'none') ? generateInnerGeometry(currentGeometry, fractureSettings.thickness) : currentGeometry;
-            mainGeometries.push(...performLightningFracture(baseForMain, fractureSettings.mainLightning));
-        } else if (fractureSettings.mainAlgorithm === 'none') {
-            if (fractureSettings.showShell && fractureSettings.shellAlgorithm !== 'none') {
-                mainGeometries.push(generateInnerGeometry(currentGeometry, fractureSettings.thickness));
-            } else {
-                mainGeometries.push(currentGeometry.clone());
-            }
-        }
-
-        // Handle shell fracturing
-        if (fractureSettings.showShell) {
-            if (fractureSettings.shellAlgorithm === 'lightning') {
-                shellGeometries.push(...performLightningFracture(currentGeometry, fractureSettings.shellLightning));
-            } else if (fractureSettings.shellAlgorithm === 'voronoi') {
-                shellGeometries.push(...performSurfaceFracture(currentGeometry, fractureSettings));
-            }
+            mainGeometries.push(...performLightningFracture(currentGeometry, fractureSettings.mainLightning));
+        } else {
+            mainGeometries.push(currentGeometry.clone());
         }
 
         const pieces: FracturePiece[] = [];
+        mainGeometries.forEach((g, i) => {
+            const centroid = new THREE.Vector3();
+            g.computeBoundingBox();
+            if (g.boundingBox) g.boundingBox.getCenter(centroid);
+            pieces.push({
+                id: 'primary-' + i + '-' + Math.random().toString(36).substring(2, 9),
+                geometry: g,
+                visible: true,
+                centroid,
+                isShell: false
+            });
+        });
+        setPrimaryPieces(pieces);
+        setSelectedPrimaryPieces(new Set());
+        setFractureSettings({ ...fractureSettings, activeTab: 'secondary' });
+        setPhase('Secondary');
+    }, 50);
+  };
+
+  const handleApplySecondaryFracture = () => {
+    if (!currentGeometry || primaryPieces.length === 0) return;
+    
+    setTimeout(() => {
+        const globalInnerCoreGeo = generateInnerGeometry(currentGeometry, fractureSettings.thickness);
+        const finalPieces: FracturePiece[] = [];
         let globalIdx = 0;
 
-        const addGeometries = (geos: THREE.BufferGeometry[], isShell: boolean) => {
-            geos.forEach(g => {
-                const centroid = new THREE.Vector3();
-                g.computeBoundingBox();
-                if (g.boundingBox) {
-                    g.boundingBox.getCenter(centroid);
-                }
-                const hue = (globalIdx * 0.137) % 1.0;
-                const colorColor = new THREE.Color().setHSL(hue, 0.8, 0.5);
-                pieces.push({
-                    id: Math.random().toString(36).substring(2, 9),
-                    geometry: g,
-                    visible: true,
-                    centroid,
-                    color: '#' + colorColor.getHexString(),
-                    isShell
-                });
-                globalIdx++;
+        const addGeo = (g: THREE.BufferGeometry, isShell: boolean) => {
+            const centroid = new THREE.Vector3();
+            g.computeBoundingBox();
+            if (g.boundingBox) g.boundingBox.getCenter(centroid);
+            const hue = (globalIdx * 0.137) % 1.0;
+            const colorColor = new THREE.Color().setHSL(hue, 0.8, 0.5);
+            finalPieces.push({
+                id: 'final-' + globalIdx + '-' + Math.random().toString(36).substring(2, 9),
+                geometry: g,
+                visible: true,
+                centroid,
+                color: '#' + colorColor.getHexString(),
+                isShell
             });
+            globalIdx++;
         };
 
-        addGeometries(mainGeometries, false);
-        addGeometries(shellGeometries, true);
-        
-        setFracturePieces(pieces);
+        primaryPieces.forEach(piece => {
+            if (selectedPrimaryPieces.has(piece.id) && fractureSettings.secondaryAlgorithm !== 'none') {
+                const { coreGeos, shellGeos } = performSecondaryFracture(piece.geometry, globalInnerCoreGeo, fractureSettings);
+                coreGeos.forEach(cg => addGeo(cg, false));
+                shellGeos.forEach(sg => addGeo(sg, true));
+            } else {
+                addGeo(piece.geometry, piece.isShell || false);
+            }
+        });
+
+        setFracturePieces(finalPieces);
         setPhase('Fracture');
     }, 50);
   };
 
   const handleTogglePiece = (id: string) => {
-     setFracturePieces(pieces => pieces.map(p => p.id === id ? { ...p, visible: !p.visible } : p));
+     if (phase === 'Secondary') {
+         setSelectedPrimaryPieces(prev => {
+             const next = new Set(prev);
+             if (next.has(id)) next.delete(id);
+             else next.add(id);
+             return next;
+         });
+     } else if (phase === 'Fracture') {
+         setFracturePieces(pieces => pieces.map(p => p.id === id ? { ...p, visible: !p.visible } : p));
+     }
   };
-
-  const handleTogglePiecesVisibility = (target: 'main' | 'shell', visible: boolean) => {
-     const isShell = target === 'shell';
-     setFracturePieces(pieces => pieces.map(p => {
-        if (!!p.isShell === isShell) {
-            return { ...p, visible };
-        }
-        return p;
-     }));
-  };
-
-  const coreVisible = fracturePieces.some(p => !p.isShell && p.visible);
-  const shellVisible = fracturePieces.some(p => p.isShell && p.visible);
 
   return (
     <div className="w-screen h-screen flex bg-neutral-950 overflow-hidden text-neutral-200 selection:bg-neutral-700 relative">
@@ -257,8 +265,10 @@ export default function App() {
            onTargetPosChange={handleTargetChange}
            fractureSettings={fractureSettings}
            onUpdateFractureSettings={setFractureSettings}
-           fracturePieces={fracturePieces}
+           fracturePieces={phase === 'Secondary' ? primaryPieces : fracturePieces}
+           selectedPrimaryPieces={selectedPrimaryPieces}
            onTogglePiece={handleTogglePiece}
+           explodeFactor={explodeFactor}
         />
 
         {/* Floating Toolbar */}
@@ -280,10 +290,10 @@ export default function App() {
         onReset={handleReset}
         fractureSettings={fractureSettings}
         onUpdateFractureSettings={setFractureSettings}
-        onApplyFracture={handleApplyFracture}
-        coreVisible={coreVisible}
-        shellVisible={shellVisible}
-        onToggleVisibility={handleTogglePiecesVisibility}
+        onApplyPrimaryFracture={handleApplyPrimaryFracture}
+        onApplySecondaryFracture={handleApplySecondaryFracture}
+        explodeFactor={explodeFactor}
+        onExplodeChange={setExplodeFactor}
       />
     </div>
   );

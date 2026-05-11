@@ -13,7 +13,7 @@ export interface GrowthSettings {
   flatShading: boolean;
 }
 
-export type Phase = 'Modeling' | 'Process' | 'Fracture' | 'View';
+export type Phase = 'Modeling' | 'Process' | 'Secondary' | 'Fracture' | 'View';
 
 export interface LightningCut {
   id: string;
@@ -32,12 +32,11 @@ export interface LightningParams {
 export interface FractureSettings {
   thickness: number;
   chunks: number;
-  target: 'main' | 'shell'; // Which one we are currently editing in the UI
-  showShell: boolean;
+  activeTab: 'main' | 'secondary';
   mainLightning: LightningParams;
-  shellLightning: LightningParams;
+  secondaryLightning: LightningParams;
   mainAlgorithm: 'lightning' | 'none';
-  shellAlgorithm: 'voronoi' | 'lightning' | 'none';
+  secondaryAlgorithm: 'voronoi' | 'lightning' | 'crush' | 'none';
 }
 
 export interface FracturePiece {

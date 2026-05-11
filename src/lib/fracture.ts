@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { FractureSettings, LightningParams } from '../types';
-import { RNG, generateLightningPath, fractureByLightning } from './lightningFracture';
+import { RNG, generateLightningPath, fractureByLightning, fractureBySeeds } from './lightningFracture';
+import { Evaluator, Brush, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
 
 export function generateInnerGeometry(baseGeo: THREE.BufferGeometry, thickness: number): THREE.BufferGeometry {
     const geo = baseGeo.clone();
@@ -76,142 +77,202 @@ export function performLightningFracture(baseGeo: THREE.BufferGeometry, settings
     return cells.map(c => c.geometry);
 }
 
-export function performSurfaceFracture(baseGeo: THREE.BufferGeometry, settings: FractureSettings): THREE.BufferGeometry[] {
-    const geo = baseGeo.clone();
-    geo.deleteAttribute('normal');
-    geo.deleteAttribute('uv');
-    const mergedGeo = BufferGeometryUtils.mergeVertices(geo, 1e-4);
-    
-    // Tessellate the geometry to create more organic, highly-detailed sub-cracks
-    const denseGeo = tessellate(mergedGeo, 3); // 3 levels (64x more triangles)
-    denseGeo.computeVertexNormals();
+export function performSecondaryFracture(
+    pieceGeo: THREE.BufferGeometry, 
+    globalInnerCoreGeo: THREE.BufferGeometry, 
+    settings: FractureSettings
+): { coreGeos: THREE.BufferGeometry[], shellGeos: THREE.BufferGeometry[] } {
+    const pieceBrush = new Brush(pieceGeo);
+    pieceBrush.updateMatrixWorld();
 
-    const pos = denseGeo.attributes.position;
-    const norm = denseGeo.attributes.normal;
-    const index = denseGeo.index;
-    
-    if (!index) return [];
+    const coreBrush = new Brush(globalInnerCoreGeo);
+    coreBrush.updateMatrixWorld();
 
-    const numTriangles = index.count / 3;
-    const centroids: THREE.Vector3[] = [];
-    
-    for (let i = 0; i < numTriangles; i++) {
-        const a = index.getX(i * 3);
-        const b = index.getX(i * 3 + 1);
-        const c = index.getX(i * 3 + 2);
-        const vA = new THREE.Vector3(pos.getX(a), pos.getY(a), pos.getZ(a));
-        const vB = new THREE.Vector3(pos.getX(b), pos.getY(b), pos.getZ(b));
-        const vC = new THREE.Vector3(pos.getX(c), pos.getY(c), pos.getZ(c));
-        centroids.push(vA.add(vB).add(vC).divideScalar(3));
+    const evaluator = new Evaluator();
+    evaluator.useGroups = false;
+    evaluator.attributes = ['position', 'normal'];
+
+    let pieceCoreBrush = new Brush(new THREE.BufferGeometry());
+    let pieceShellBrush = new Brush(new THREE.BufferGeometry());
+    let csgFailed = false;
+
+    try {
+        pieceCoreBrush = evaluator.evaluate(pieceBrush, coreBrush, INTERSECTION);
+        pieceShellBrush = evaluator.evaluate(pieceBrush, coreBrush, SUBTRACTION);
+    } catch(e) {
+        csgFailed = true;
     }
 
-    const numChunks = Math.min(settings.chunks, Math.max(1, Math.floor(numTriangles / 2)));
+    const coreGeos: THREE.BufferGeometry[] = [];
+    const shellGeos: THREE.BufferGeometry[] = [];
+
+    // Check if the CSG result actually has substantive geometry
+    const hasGeometry = (b: Brush) => b.geometry && b.geometry.attributes.position && b.geometry.attributes.position.count > 0;
+
+    if (!csgFailed && hasGeometry(pieceCoreBrush)) {
+        coreGeos.push(pieceCoreBrush.geometry);
+    }
+
+    if (!csgFailed && hasGeometry(pieceShellBrush)) {
+        if (settings.secondaryAlgorithm === 'lightning') {
+             const shellFractured = performLightningFracture(pieceShellBrush.geometry, settings.secondaryLightning);
+             shellGeos.push(...shellFractured);
+        } else if (settings.secondaryAlgorithm === 'voronoi') {
+             const shellFractured = performVoronoiFracture(pieceShellBrush.geometry, settings.chunks);
+             shellGeos.push(...shellFractured);
+        } else if (settings.secondaryAlgorithm === 'crush') {
+             const shellFractured = performCrushFracture(pieceShellBrush.geometry, settings.chunks);
+             shellGeos.push(...shellFractured);
+        } else {
+             shellGeos.push(pieceShellBrush.geometry);
+        }
+    } else {
+        // If CSG subtraction yielded nothing, it might be entirely inside the core (which is handled),
+        // or CSG failed. If CSG failed but we need a fallback:
+        if (csgFailed || !hasGeometry(pieceCoreBrush)) {
+             coreGeos.push(pieceGeo);
+        }
+    }
+
+    return { coreGeos, shellGeos };
+}
+
+export function performVoronoiFracture(geo: THREE.BufferGeometry, numChunks: number): THREE.BufferGeometry[] {
+    const pos = geo.attributes.position;
+    if (!pos || pos.count === 0) return [geo];
+    
+    const numTriangles = Math.floor(pos.count / 3);
+    const actualChunks = Math.min(numChunks, Math.max(1, numTriangles));
     const seeds: THREE.Vector3[] = [];
-    for (let i = 0; i < numChunks; i++) {
-        seeds.push(centroids[Math.floor(Math.random() * numTriangles)]);
-    }
-
-    const chunkAssignments = new Int32Array(numTriangles);
-    for (let i = 0; i < numTriangles; i++) {
-        let minDist = Infinity;
-        let bestChunk = 0;
-        
-        const p = centroids[i].clone();
-        p.x += Math.sin(p.y * 15) * 0.15;
-        p.y += Math.sin(p.z * 15) * 0.15;
-        p.z += Math.sin(p.x * 15) * 0.15;
-
-        for (let c = 0; c < numChunks; c++) {
-            const d = p.distanceToSquared(seeds[c]);
-            if (d < minDist) {
-                minDist = d;
-                bestChunk = c;
-            }
-        }
-        chunkAssignments[i] = bestChunk;
-    }
-
-    const chunkGeometries: THREE.BufferGeometry[] = [];
     
-    const getEdgeKey = (i1: number, i2: number) => {
-        return i1 < i2 ? `${i1}-${i2}` : `${i2}-${i1}`;
-    };
-
-    const getVertex = (idx: number, isInner: boolean) => {
-        const p = new THREE.Vector3(pos.getX(idx), pos.getY(idx), pos.getZ(idx));
-        if (isInner) {
-            const n = new THREE.Vector3(norm.getX(idx), norm.getY(idx), norm.getZ(idx));
-            p.addScaledVector(n, -settings.thickness);
-        }
-        return p;
-    };
-
-    for (let c = 0; c < numChunks; c++) {
-        const positions: number[] = [];
-        const edges = new Map<string, {a: number, b: number, count: number}>();
-        
-        for (let i = 0; i < numTriangles; i++) {
-            if (chunkAssignments[i] === c) {
-                const iA = index.getX(i * 3);
-                const iB = index.getX(i * 3 + 1);
-                const iC = index.getX(i * 3 + 2);
-
-                const addTri = (idxA: number, idxB: number, idxC: number, isInner: boolean) => {
-                     const vA = getVertex(idxA, isInner);
-                     const vB = getVertex(idxB, isInner);
-                     const vC = getVertex(idxC, isInner);
-                     if (isInner) {
-                         positions.push(vA.x, vA.y, vA.z);
-                         positions.push(vC.x, vC.y, vC.z);
-                         positions.push(vB.x, vB.y, vB.z);
-                     } else {
-                         positions.push(vA.x, vA.y, vA.z);
-                         positions.push(vB.x, vB.y, vB.z);
-                         positions.push(vC.x, vC.y, vC.z);
-                     }
-                };
-
-                addTri(iA, iB, iC, false);
-                addTri(iA, iB, iC, true);
-
-                const addEdge = (a: number, b: number) => {
-                    const key = getEdgeKey(a, b);
-                    if (!edges.has(key)) {
-                        edges.set(key, {a, b, count: 1});
-                    } else {
-                        edges.get(key)!.count++;
-                    }
-                };
-                addEdge(iA, iB);
-                addEdge(iB, iC);
-                addEdge(iC, iA);
-            }
-        }
-        
-        if (positions.length === 0) continue;
-
-        for (const [key, edge] of edges.entries()) {
-            if (edge.count === 1) {
-                const vA_out = getVertex(edge.a, false);
-                const vB_out = getVertex(edge.b, false);
-                const vA_in = getVertex(edge.a, true);
-                const vB_in = getVertex(edge.b, true);
-
-                positions.push(vA_out.x, vA_out.y, vA_out.z);
-                positions.push(vB_out.x, vB_out.y, vB_out.z);
-                positions.push(vB_in.x, vB_in.y, vB_in.z);
-
-                positions.push(vA_out.x, vA_out.y, vA_out.z);
-                positions.push(vB_in.x, vB_in.y, vB_in.z);
-                positions.push(vA_in.x, vA_in.y, vA_in.z);
-            }
-        }
-
-        const chunkGeo = new THREE.BufferGeometry();
-        chunkGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        chunkGeo.computeVertexNormals(); 
-        chunkGeometries.push(chunkGeo);
+    for (let i = 0; i < actualChunks; i++) {
+        const idx = Math.floor(Math.random() * numTriangles) * 3;
+        seeds.push(new THREE.Vector3(pos.getX(idx), pos.getY(idx), pos.getZ(idx)));
     }
+    
+    const cells = fractureBySeeds(geo, seeds, 0.1, Math.random() * 1000);
+    return cells.map((c: any) => c.geometry);
+}
 
-    return chunkGeometries;
+export function performCrushFracture(geo: THREE.BufferGeometry, numSlices: number): THREE.BufferGeometry[] {
+    const evaluator = new Evaluator();
+    evaluator.useGroups = false;
+    evaluator.attributes = ['position', 'normal'];
+
+    let fragments: Brush[] = [];
+    const initialBrush = new Brush(geo);
+    initialBrush.updateMatrixWorld();
+    fragments.push(initialBrush);
+    
+    geo.computeBoundingBox();
+    const box = geo.boundingBox;
+    if (!box) return [geo];
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z) * 2;
+
+    const baseCGeo = new THREE.BoxGeometry(maxDim, maxDim, maxDim);
+    baseCGeo.translate(0, 0, -maxDim / 2); // So the face is at Z=0 and it cuts half-space
+
+    for(let i = 0; i < numSlices; i++) {
+        if (fragments.length === 0) break;
+        
+        // Pick the largest fragment to slice, to ensure an even distribution
+        let largestIdx = 0;
+        let largestSize = 0;
+        for (let j = 0; j < fragments.length; j++) {
+            if (!fragments[j].geometry.boundingBox) fragments[j].geometry.computeBoundingBox();
+            const bbox = fragments[j].geometry.boundingBox!;
+            const diag = bbox.min.distanceToSquared(bbox.max);
+            if (diag > largestSize) {
+                largestSize = diag;
+                largestIdx = j;
+            }
+        }
+        
+        const idx = largestIdx;
+        const target = fragments[idx];
+        const tBox = target.geometry.boundingBox!;
+
+        const center = new THREE.Vector3();
+        tBox.getCenter(center);
+        
+        // Random offset from center to create varying depths
+        center.x += (Math.random() - 0.5) * (tBox.max.x - tBox.min.x) * 0.8;
+        center.y += (Math.random() - 0.5) * (tBox.max.y - tBox.min.y) * 0.8;
+        center.z += (Math.random() - 0.5) * (tBox.max.z - tBox.min.z) * 0.8;
+
+        // Random normal
+        const normal = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+
+        const cutterGeo = baseCGeo.clone();
+        // Perturb the cut plane slightly to make it less perfectly flat? Could do, but maybe clean cut is fine for "crush" layers.
+        const cutter = new Brush(cutterGeo);
+        cutter.position.copy(center);
+        const targetPoint = center.clone().add(normal);
+        cutter.lookAt(targetPoint);
+        cutter.updateMatrixWorld();
+
+        try {
+            const sideA = evaluator.evaluate(target, cutter, SUBTRACTION);
+            const sideB = evaluator.evaluate(target, cutter, INTERSECTION);
+
+            const hasVol = (b: Brush) => b.geometry && b.geometry.attributes.position && b.geometry.attributes.position.count > 0;
+            
+            const newFragments: Brush[] = [];
+            let sliced = false;
+            // Only add sides if they actually resulted in some geometry
+            if (hasVol(sideA) && hasVol(sideB)) {
+                newFragments.push(sideA, sideB);
+                sliced = true;
+            } else if (hasVol(sideA)) { // The slice might miss, so just keep the piece
+                // This means B was empty, slice was outside
+            } else if (hasVol(sideB)) {
+                // A was empty
+            }
+
+            if (sliced) {
+                fragments.splice(idx, 1, ...newFragments);
+            }
+        } catch(e) {
+            // CSG failed, keep target intact
+        }
+    }
+    
+    return fragments.map(f => f.geometry);
+}
+
+
+function generateInnerShellGeoForCSG(baseGeo: THREE.BufferGeometry, thickness: number): THREE.BufferGeometry {
+    // We already have generateInnerGeometry which generates the core.
+    // If we want a solid volumetric shell, we could technically CSG subtract the core from the baseGeo.
+    // Since we are fracture slicing, using evaluator.evaluate(baseRockBrush, cellBrush, INTERSECTION) will work best if baseRockBrush is actually the hollowed shell!
+    const outerGeo = baseGeo.clone();
+    outerGeo.computeVertexNormals();
+    
+    const innerGeo = outerGeo.clone();
+    const pos = innerGeo.attributes.position;
+    const norm = innerGeo.attributes.normal;
+    for (let i = 0; i < pos.count; i++) {
+        pos.setXYZ(
+            i, 
+            pos.getX(i) - norm.getX(i) * thickness,
+            pos.getY(i) - norm.getY(i) * thickness,
+            pos.getZ(i) - norm.getZ(i) * thickness
+        );
+    }
+    innerGeo.computeVertexNormals();
+
+    const outerBrush = new Brush(outerGeo);
+    outerBrush.updateMatrixWorld();
+    
+    const innerBrush = new Brush(innerGeo);
+    innerBrush.updateMatrixWorld();
+
+    const evaluator = new Evaluator();
+    evaluator.useGroups = false;
+    evaluator.attributes = ['position', 'normal'];
+
+    const shellBrush = evaluator.evaluate(outerBrush, innerBrush, SUBTRACTION);
+    return shellBrush.geometry || outerGeo;
 }

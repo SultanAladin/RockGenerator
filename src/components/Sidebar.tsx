@@ -13,10 +13,10 @@ interface SidebarProps {
   
   fractureSettings: FractureSettings;
   onUpdateFractureSettings: (s: FractureSettings) => void;
-  onApplyFracture: () => void;
-  coreVisible?: boolean;
-  shellVisible?: boolean;
-  onToggleVisibility?: (target: 'main' | 'shell', visible: boolean) => void;
+  onApplyPrimaryFracture: () => void;
+  onApplySecondaryFracture: () => void;
+  explodeFactor?: number;
+  onExplodeChange?: (val: number) => void;
 }
 
 export function Sidebar({ 
@@ -30,10 +30,10 @@ export function Sidebar({
   onReset,
   fractureSettings,
   onUpdateFractureSettings,
-  onApplyFracture,
-  coreVisible = true,
-  shellVisible = true,
-  onToggleVisibility
+  onApplyPrimaryFracture,
+  onApplySecondaryFracture,
+  explodeFactor = 0,
+  onExplodeChange,
 }: SidebarProps) {
 
   return (
@@ -41,13 +41,15 @@ export function Sidebar({
       <div className="p-4 border-b border-neutral-800 sticky top-0 bg-neutral-900/95 backdrop-blur z-10 flex flex-col gap-2">
         <h1 className="text-xl font-medium flex items-center gap-2">
           {phase === 'Modeling' && <><Pickaxe className="w-5 h-5 text-neutral-400" />Modeling</>}
-          {phase === 'Process' && <><Zap className="w-5 h-5 text-purple-400" />Process</>}
-          {phase === 'Fracture' && <><Scissors className="w-5 h-5 text-orange-400" />Fracture</>}
+          {phase === 'Process' && <><Zap className="w-5 h-5 text-orange-400" />Core Fracture</>}
+          {phase === 'Secondary' && <><Zap className="w-5 h-5 text-purple-400" />Surface Fracture</>}
+          {phase === 'Fracture' && <><Scissors className="w-5 h-5 text-emerald-400" />Review</>}
           {phase === 'View' && <><Camera className="w-5 h-5 text-emerald-400" />View</>}
         </h1>
         <p className="text-xs text-neutral-500 leading-relaxed">
           {phase === 'Modeling' && 'Interactive organic generation. Select a face, position the node, and extrude organic chunks.'}
-          {phase === 'Process' && 'Adjust the thickness and number of chunks to randomly fracture the mesh into pieces.'}
+          {phase === 'Process' && 'Fracture the main rock into its primary chunks.'}
+          {phase === 'Secondary' && 'Select specific primary chunks to receive a secondary surface-level fracture mask.'}
           {phase === 'Fracture' && 'Select disjoint geometry chunks to hide them (simulating pieces falling off).'}
           {phase === 'View' && 'View the rock with texturing, ambient occlusion, and rendering effects.'}
         </p>
@@ -138,111 +140,28 @@ export function Sidebar({
            <>
              <section className="flex flex-col gap-4">
                  <div className="bg-neutral-800/50 p-4 rounded-xl border border-neutral-700/50 flex flex-col gap-4">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-purple-400">Fracture Target</h3>
-                    <div className="flex bg-neutral-900 rounded-lg p-1 gap-1 border border-neutral-700">
-                      <button
-                        onClick={() => onUpdateFractureSettings({ ...fractureSettings, target: 'main' })}
-                        className={`flex-1 text-sm py-1 rounded-md transition-colors ${fractureSettings.target === 'main' ? 'bg-orange-600/50 text-orange-200' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
-                      >
-                        Main Mesh
-                      </button>
-                      <button
-                        onClick={() => onUpdateFractureSettings({ ...fractureSettings, target: 'shell' })}
-                        className={`flex-1 text-sm py-1 rounded-md transition-colors ${fractureSettings.target === 'shell' ? 'bg-purple-600/50 text-purple-200' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
-                      >
-                        Shell Layer
-                      </button>
-                    </div>
-
-                    <div className="flex items-center gap-2 mt-1">
-                      <input 
-                        type="checkbox" 
-                        id="showShell" 
-                        checked={fractureSettings.showShell}
-                        onChange={(e) => onUpdateFractureSettings({...fractureSettings, showShell: e.target.checked})}
-                        className="rounded border-neutral-600 bg-neutral-800 text-purple-500 focus:ring-purple-500"
-                      />
-                      <label htmlFor="showShell" className="text-sm text-neutral-300 cursor-pointer">Enable Shell</label>
-                    </div>
-
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400 mt-2">Algorithm</h3>
-                    {fractureSettings.target === 'main' ? (
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-orange-400">Core Fracture Algorithm</h3>
                       <div className="flex bg-neutral-900 rounded-lg p-1 gap-1 border border-neutral-700">
                         <button
-                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, mainAlgorithm: 'lightning' })}
+                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, mainAlgorithm: 'lightning', activeTab: 'main' })}
                           className={`flex-1 text-sm py-1 rounded-md transition-colors ${fractureSettings.mainAlgorithm === 'lightning' ? 'bg-neutral-700 text-white' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
                         >
                           Lightning Path
                         </button>
                         <button
-                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, mainAlgorithm: 'none' })}
+                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, mainAlgorithm: 'none', activeTab: 'main' })}
                           className={`flex-1 text-sm py-1 rounded-md transition-colors ${fractureSettings.mainAlgorithm === 'none' ? 'bg-neutral-700 text-white' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
                         >
                           None
                         </button>
                       </div>
-                    ) : (
-                      <div className="flex bg-neutral-900 rounded-lg p-1 gap-1 border border-neutral-700">
-                        <button
-                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, shellAlgorithm: 'voronoi' })}
-                          className={`flex-1 text-xs py-1 rounded-md transition-colors ${fractureSettings.shellAlgorithm === 'voronoi' ? 'bg-neutral-700 text-white' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
-                        >
-                          Voronoi
-                        </button>
-                        <button
-                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, shellAlgorithm: 'lightning' })}
-                          className={`flex-1 text-xs py-1 rounded-md transition-colors ${fractureSettings.shellAlgorithm === 'lightning' ? 'bg-neutral-700 text-white' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
-                        >
-                          Lightning
-                        </button>
-                        <button
-                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, shellAlgorithm: 'none' })}
-                          className={`flex-1 text-xs py-1 rounded-md transition-colors ${fractureSettings.shellAlgorithm === 'none' ? 'bg-neutral-700 text-white' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
-                        >
-                          None
-                        </button>
-                      </div>
-                    )}
 
-                    {fractureSettings.target === 'shell' && fractureSettings.shellAlgorithm === 'voronoi' && (
-                      <>
-                        <div className="flex flex-col gap-1.5 mt-2">
-                           <div className="flex justify-between items-end">
-                             <label className="text-sm">Thickness</label>
-                             <span className="text-xs text-neutral-500">{fractureSettings.thickness.toFixed(2)}</span>
-                           </div>
-                           <input 
-                             type="range" min="0.05" max="2.0" step="0.05" 
-                             value={fractureSettings.thickness} 
-                             onChange={e => onUpdateFractureSettings({ ...fractureSettings, thickness: parseFloat(e.target.value) })}
-                             className="accent-purple-500 cursor-pointer"
-                           />
-                        </div>
-                        <div className="flex flex-col gap-1.5">
-                           <div className="flex justify-between items-end">
-                             <label className="text-sm">Chunks Density</label>
-                             <span className="text-xs text-neutral-500">{fractureSettings.chunks}</span>
-                           </div>
-                           <input 
-                             type="range" min="2" max="100" step="1" 
-                             value={fractureSettings.chunks} 
-                             onChange={e => onUpdateFractureSettings({ ...fractureSettings, chunks: parseInt(e.target.value) })}
-                             className="accent-purple-500 cursor-pointer"
-                           />
-                        </div>
-                      </>
-                    )}
-
-                    {((fractureSettings.target === 'main' && fractureSettings.mainAlgorithm === 'lightning') || 
-                      (fractureSettings.target === 'shell' && fractureSettings.shellAlgorithm === 'lightning')) && (
-                      <div className="mt-2 flex flex-col gap-3">
+                    {fractureSettings.mainAlgorithm === 'lightning' && (
+                      <div className="mt-2 flex flex-col gap-3 border-t border-neutral-700 pt-3">
                         {(() => {
-                           const light = fractureSettings.target === 'main' ? fractureSettings.mainLightning : fractureSettings.shellLightning;
-                           const setLight = (newLight: any) => {
-                             if (fractureSettings.target === 'main') onUpdateFractureSettings({ ...fractureSettings, mainLightning: newLight });
-                             else onUpdateFractureSettings({ ...fractureSettings, shellLightning: newLight });
-                           };
-                           const accent = fractureSettings.target === 'main' ? 'accent-orange-500' : 'accent-purple-500';
+                           const light = fractureSettings.mainLightning;
+                           const setLight = (newLight: any) => onUpdateFractureSettings({ ...fractureSettings, mainLightning: newLight });
+                           const accent = 'accent-orange-500';
                            return (
                              <>
                                 <div className="flex justify-between items-center mb-2">
@@ -311,10 +230,157 @@ export function Sidebar({
              </section>
              <section className="flex flex-col gap-4 border-t border-neutral-800 pt-4 mt-2">
                 <button
-                  onClick={onApplyFracture}
+                  onClick={onApplyPrimaryFracture}
                   className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-orange-600 hover:bg-orange-500 text-white rounded-lg text-sm font-semibold shadow-lg shadow-orange-900/50 transition-all"
                 >
-                  <Scissors className="w-4 h-4" /> Apply Fracture
+                  <Scissors className="w-4 h-4" /> Apply Primary Fracture
+                </button>
+             </section>
+           </>
+        )}
+
+        {phase === 'Secondary' && (
+           <>
+             <section className="flex flex-col gap-4">
+                 <div className="bg-neutral-800/50 p-4 rounded-xl border border-neutral-700/50 flex flex-col gap-4">
+                    <div className="flex justify-between items-center">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-purple-400">Surface Fracture Algorithm</h3>
+                    </div>
+                      <div className="flex bg-neutral-900 rounded-lg p-1 gap-1 border border-neutral-700">
+                        <button
+                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, secondaryAlgorithm: 'voronoi', activeTab: 'secondary' })}
+                          className={`flex-1 text-xs py-1 rounded-md transition-colors ${fractureSettings.secondaryAlgorithm === 'voronoi' ? 'bg-neutral-700 text-white' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
+                        >
+                          Voronoi
+                        </button>
+                        <button
+                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, secondaryAlgorithm: 'crush', activeTab: 'secondary' })}
+                          className={`flex-1 text-xs py-1 rounded-md transition-colors ${fractureSettings.secondaryAlgorithm === 'crush' ? 'bg-neutral-700 text-white' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
+                        >
+                          Crush
+                        </button>
+                        <button
+                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, secondaryAlgorithm: 'lightning', activeTab: 'secondary' })}
+                          className={`flex-1 text-xs py-1 rounded-md transition-colors ${fractureSettings.secondaryAlgorithm === 'lightning' ? 'bg-neutral-700 text-white' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
+                        >
+                          Lightning
+                        </button>
+                        <button
+                          onClick={() => onUpdateFractureSettings({ ...fractureSettings, secondaryAlgorithm: 'none', activeTab: 'secondary' })}
+                          className={`flex-1 text-xs py-1 rounded-md transition-colors ${fractureSettings.secondaryAlgorithm === 'none' ? 'bg-neutral-700 text-white' : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'}`}
+                        >
+                          None
+                        </button>
+                      </div>
+
+                    {fractureSettings.secondaryAlgorithm !== 'none' && (
+                      <div className="flex flex-col gap-1.5 mt-2 border-t border-neutral-700 pt-3">
+                         <div className="flex justify-between items-end">
+                           <label className="text-sm">Surface Mask Thickness</label>
+                           <span className="text-xs text-neutral-500">{fractureSettings.thickness.toFixed(2)}</span>
+                         </div>
+                         <input 
+                           type="range" min="0.05" max="2.0" step="0.05" 
+                           value={fractureSettings.thickness} 
+                           onChange={e => onUpdateFractureSettings({ ...fractureSettings, thickness: parseFloat(e.target.value) })}
+                           className="accent-purple-500 cursor-pointer"
+                         />
+                      </div>
+                    )}
+
+                    {(fractureSettings.secondaryAlgorithm === 'voronoi' || fractureSettings.secondaryAlgorithm === 'crush') && (
+                      <div className="flex flex-col gap-1.5">
+                         <div className="flex justify-between items-end">
+                           <label className="text-sm">Density (Chunks/Layers)</label>
+                           <span className="text-xs text-neutral-500">{fractureSettings.chunks}</span>
+                         </div>
+                         <input 
+                           type="range" min="2" max="100" step="1" 
+                           value={fractureSettings.chunks} 
+                           onChange={e => onUpdateFractureSettings({ ...fractureSettings, chunks: parseInt(e.target.value) })}
+                           className="accent-purple-500 cursor-pointer"
+                         />
+                      </div>
+                    )}
+
+                    {fractureSettings.secondaryAlgorithm === 'lightning' && (
+                      <div className="mt-2 flex flex-col gap-3 border-t border-neutral-700 pt-3">
+                        {(() => {
+                           const light = fractureSettings.secondaryLightning;
+                           const setLight = (newLight: any) => onUpdateFractureSettings({ ...fractureSettings, secondaryLightning: newLight });
+                           const accent = 'accent-purple-500';
+                           return (
+                             <>
+                                <div className="flex justify-between items-center mb-2">
+                                  <span className="text-xs text-neutral-400">{light.cuts.length} cuts defined</span>
+                                  <button 
+                                     onClick={() => setLight({...light, cuts: []})}
+                                     className="text-xs bg-red-900/50 hover:bg-red-800 text-red-200 px-2 py-0.5 rounded"
+                                  >
+                                     Clear Cuts
+                                  </button>
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <div className="flex justify-between items-end">
+                                     <label className="text-sm">Branches</label>
+                                     <span className="text-xs text-neutral-500">{light.fractureBranches}</span>
+                                   </div>
+                                   <input 
+                                     type="range" min="0" max="8" step="1" 
+                                     value={light.fractureBranches} 
+                                     onChange={e => setLight({ ...light, fractureBranches: parseInt(e.target.value) })}
+                                     className={`${accent} cursor-pointer`}
+                                   />
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <div className="flex justify-between items-end">
+                                     <label className="text-sm">Jitter</label>
+                                     <span className="text-xs text-neutral-500">{light.fractureJitter.toFixed(2)}</span>
+                                   </div>
+                                   <input 
+                                     type="range" min="0" max="1" step="0.05" 
+                                     value={light.fractureJitter} 
+                                     onChange={e => setLight({ ...light, fractureJitter: parseFloat(e.target.value) })}
+                                     className={`${accent} cursor-pointer`}
+                                   />
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <div className="flex justify-between items-end">
+                                     <label className="text-sm">Segments</label>
+                                     <span className="text-xs text-neutral-500">{light.fractureSegments}</span>
+                                   </div>
+                                   <input 
+                                     type="range" min="4" max="64" step="1" 
+                                     value={light.fractureSegments} 
+                                     onChange={e => setLight({ ...light, fractureSegments: parseInt(e.target.value) })}
+                                     className={`${accent} cursor-pointer`}
+                                   />
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <div className="flex justify-between items-end">
+                                     <label className="text-sm">Seed</label>
+                                     <span className="text-xs text-neutral-500">{light.seed}</span>
+                                   </div>
+                                   <input 
+                                     type="range" min="0" max="1000" step="1" 
+                                     value={light.seed} 
+                                     onChange={e => setLight({ ...light, seed: parseInt(e.target.value) })}
+                                     className={`${accent} cursor-pointer`}
+                                   />
+                                </div>
+                             </>
+                           );
+                        })()}
+                      </div>
+                    )}
+                 </div>
+             </section>
+             <section className="flex flex-col gap-4 border-t border-neutral-800 pt-4 mt-2">
+                <button
+                  onClick={onApplySecondaryFracture}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-semibold shadow-lg shadow-purple-900/50 transition-all"
+                >
+                  <Scissors className="w-4 h-4" /> Apply Secondary Fracture
                 </button>
              </section>
            </>
@@ -330,30 +396,21 @@ export function Sidebar({
                      </p>
                   </div>
               )}
-              
-              <div className="flex flex-col gap-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Visibility</h3>
-                <div className="flex flex-col gap-2 bg-neutral-800/30 border border-neutral-700/50 p-2 rounded-lg">
-                   <div className="flex items-center justify-between">
-                     <span className="text-sm text-neutral-300">Core</span>
-                     <button
-                        onClick={() => onToggleVisibility?.('main', !coreVisible)}
-                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-neutral-900 ${coreVisible ? 'bg-orange-500' : 'bg-neutral-600'}`}
-                     >
-                        <span aria-hidden="true" className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${coreVisible ? 'translate-x-2' : '-translate-x-2'}`} />
-                     </button>
-                   </div>
-                   <div className="flex items-center justify-between">
-                     <span className="text-sm text-neutral-300">Shell</span>
-                     <button
-                        onClick={() => onToggleVisibility?.('shell', !shellVisible)}
-                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-neutral-900 ${shellVisible ? 'bg-purple-500' : 'bg-neutral-600'}`}
-                     >
-                        <span aria-hidden="true" className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${shellVisible ? 'translate-x-2' : '-translate-x-2'}`} />
-                     </button>
-                   </div>
-                </div>
-              </div>
+
+              {phase === 'Fracture' && (
+                 <div className="flex flex-col gap-1.5 mt-2">
+                    <div className="flex justify-between items-end">
+                      <label className="text-sm text-neutral-300">Explode Pieces</label>
+                      <span className="text-xs text-neutral-500">{explodeFactor.toFixed(2)}</span>
+                    </div>
+                    <input 
+                      type="range" min="0" max="2" step="0.05" 
+                      value={explodeFactor} 
+                      onChange={e => onExplodeChange?.(parseFloat(e.target.value))}
+                      className="accent-emerald-500 cursor-pointer"
+                    />
+                 </div>
+              )}
 
               {phase === 'Fracture' && (
                   <button
